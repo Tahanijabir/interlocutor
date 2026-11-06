@@ -2496,7 +2496,7 @@ async def get_index():
 	for html_file in possible_paths:
 		if html_file.exists():
 			try:
-				return HTMLResponse(content=html_file.read_text(), status_code=200)
+				return HTMLResponse(content=html_file.read_text(encoding="utf-8"), status_code=200)
 			except Exception as e:
 				print(f"Error reading {html_file}: {e}")
 				continue
