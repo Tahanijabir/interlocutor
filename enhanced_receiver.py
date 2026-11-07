@@ -634,40 +634,45 @@ class EnhancedMessageReceiver:
 
 
     def _notify_web_async(self, event_type, data):
-        """Send async notification to web interface"""
-        def notify():
+        """Schedule web notifications on the web server event loop."""
+        bridge = self.web_bridge
+        web = getattr(bridge, "web_interface", None)
+        loop = getattr(web, "server_loop", None)
+
+        if loop is None or not loop.is_running():
+            DebugConfig.debug_print("Web notification skipped: server loop unavailable")
+            return
+
+        coro = None
+        try:
+            if event_type == "audio_received":
+                coro = bridge.notify_audio_received(data)
+            elif event_type == "control_received":
+                coro = bridge.notify_control_received(data)
+            elif event_type == "accessibility_announcement":
+                coro = web.broadcast_to_all({
+                    "type": "accessibility_announcement",
+                    "data": data
+                })
+            else:
+                coro = bridge.notify_message_received(data)
+
+            future = asyncio.run_coroutine_threadsafe(coro, loop)
+        except Exception as exc:
+            if coro is not None:
+                coro.close()
+            DebugConfig.debug_print(f"Error scheduling web notification: {exc}")
+            return
+
+        def on_complete(completed):
             try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-            
-                if event_type == 'audio_received':
-                    loop.run_until_complete(self.web_bridge.notify_audio_received(data))
-                elif event_type == 'control_received':
-                    # NEW: Handle control messages separately
-                    loop.run_until_complete(self.web_bridge.notify_control_received(data))
-                elif event_type == 'accessibility_announcement':
-                    # Route accessibility announcements directly as their own event type
-                    # — NOT as a message (which would create a ghost bubble in the UI)
-                    if self.web_bridge.web_interface:
-                        loop.run_until_complete(
-                            self.web_bridge.web_interface.broadcast_to_all({
-                                'type': 'accessibility_announcement',
-                                'data': data
-                            })
-                        )
-                else:
-                    # All other messages (text, etc.) go to message handler
-                    loop.run_until_complete(self.web_bridge.notify_message_received(data))
-                
-                self.stats['web_notifications'] += 1
-                loop.close()
-            except Exception as e:
-                DebugConfig.debug_print(f"Error in web notification: {e}")
-            
-        threading.Thread(target=notify, daemon=True).start()
+                completed.result()
+            except Exception as exc:
+                DebugConfig.debug_print(f"Error in web notification: {exc}")
+            else:
+                self.stats["web_notifications"] += 1
 
-
-
+        future.add_done_callback(on_complete)
 
 
     def _handle_transcription_result(self, result: TranscriptionResult):

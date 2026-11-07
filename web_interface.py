@@ -37,6 +37,7 @@ class EnhancedRadioWebInterface:
 		self.config = config
 		self.config_manager = config_manager
 		self.websocket_clients: Set[WebSocket] = set()
+		self.server_loop = None
 		self.status_cache = {}
 		self.message_history = []
 		
@@ -88,6 +89,7 @@ class EnhancedRadioWebInterface:
 		"""Handle new WebSocket connection - Enhanced with message history"""
 		try:
 			await websocket.accept()
+			self.server_loop = asyncio.get_running_loop()
 			self.websocket_clients.add(websocket)
 		
 			# Send current status to new client
@@ -130,6 +132,7 @@ class EnhancedRadioWebInterface:
 		}
 		
 		DebugConfig.debug_print(f"📡 TRANSMISSION START: {transmission_id} from {station_id}")
+		return transmission_id
 
 
 

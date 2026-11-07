@@ -234,7 +234,7 @@ class TerminalChatInterface:
 		while self.running:
 			try:
 				# Use select for non-blocking input on Unix systems
-				if select.select([sys.stdin], [], [], 0.1)[0]:
+				if sys.platform == "win32" or select.select([sys.stdin], [], [], 0.1)[0]:
 					message = sys.stdin.readline().strip()
 					
 					if message.lower() == 'quit':
@@ -1324,31 +1324,34 @@ class GPIOZeroPTTHandler:
 
 
 
-		# NEW: Start tracking our own outgoing transmission for web interface
-		if hasattr(self, 'enhanced_receiver') and self.enhanced_receiver and hasattr(self.enhanced_receiver, 'web_bridge'):
-			try:
-				# Create outgoing transmission tracking
-				def notify_outgoing_start():
-					try:
-						loop = asyncio.new_event_loop()
-						asyncio.set_event_loop(loop)
-						loop.run_until_complete(
-							self.enhanced_receiver.web_bridge.notify_outgoing_transmission_started({
-								"station_id": str(self.station_id),
-								"start_time": datetime.now().isoformat(),
-								"direction": "outgoing"
-							})
-						)
-						loop.close()
-					except Exception as e:
-						DebugConfig.debug_print(f"Error notifying outgoing start: {e}")
-            
-				# Run in separate thread to avoid blocking audio
-				threading.Thread(target=notify_outgoing_start, daemon=True).start()
-				DebugConfig.debug_print(f"📤 Started tracking outgoing transmission")
-			except Exception as e:
-				DebugConfig.debug_print(f"Error starting outgoing transmission tracking: {e}")
+		# Schedule outgoing start notification on the server loop.
+		receiver = getattr(self, "enhanced_receiver", None)
+		bridge = getattr(receiver, "web_bridge", None)
+		web = getattr(bridge, "web_interface", None)
+		server_loop = getattr(web, "server_loop", None)
 
+		if server_loop is not None and server_loop.is_running():
+		    coro = bridge.notify_outgoing_transmission_started({
+		        "station_id": str(self.station_id),
+		        "start_time": datetime.now().isoformat(),
+		        "direction": "outgoing"
+		    })
+		    try:
+		        future = asyncio.run_coroutine_threadsafe(coro, server_loop)
+		    except Exception as exc:
+		        coro.close()
+		        DebugConfig.debug_print(
+		            f"Error scheduling outgoing start: {exc}"
+		        )
+		    else:
+		        def on_done(completed):
+		            try:
+		                completed.result()
+		            except Exception as exc:
+		                DebugConfig.debug_print(
+		                    f"Error notifying outgoing start: {exc}"
+		                )
+		        future.add_done_callback(on_done)
 
 		# LED on
 		self.led.on()
@@ -1364,32 +1367,35 @@ class GPIOZeroPTTHandler:
 
 		DebugConfig.user_print(f"\n🔇 {self.station_id}: PTT was released")
 
-		# NEW: End tracking our own outgoing transmission for web interface
-		if hasattr(self, 'enhanced_receiver') and self.enhanced_receiver and hasattr(self.enhanced_receiver, 'web_bridge'):
-			try:
-				# Create outgoing transmission end tracking
-				def notify_outgoing_end():
-					try:
-						loop = asyncio.new_event_loop()
-						asyncio.set_event_loop(loop)
-						loop.run_until_complete(
-							self.enhanced_receiver.web_bridge.notify_outgoing_transmission_ended({
-								"station_id": str(self.station_id),
-								"end_time": datetime.now().isoformat(),
-								"direction": "outgoing"
-							})
-						)
-						loop.close()
-					except Exception as e:
-						DebugConfig.debug_print(f"Error notifying outgoing end: {e}")
-            
-				# Run in separate thread to avoid blocking audio
-				threading.Thread(target=notify_outgoing_end, daemon=True).start()
-				DebugConfig.debug_print(f"📤 Ended tracking outgoing transmission")
-			except Exception as e:
-				DebugConfig.debug_print(f"Error ending outgoing transmission tracking: {e}")
+		# Schedule outgoing end notification on the server loop.
+		receiver = getattr(self, "enhanced_receiver", None)
+		bridge = getattr(receiver, "web_bridge", None)
+		web = getattr(bridge, "web_interface", None)
+		server_loop = getattr(web, "server_loop", None)
 
-    
+		if server_loop is not None and server_loop.is_running():
+		    coro = bridge.notify_outgoing_transmission_ended({
+		        "station_id": str(self.station_id),
+		        "end_time": datetime.now().isoformat(),
+		        "direction": "outgoing"
+		    })
+		    try:
+		        future = asyncio.run_coroutine_threadsafe(coro, server_loop)
+		    except Exception as exc:
+		        coro.close()
+		        DebugConfig.debug_print(
+		            f"Error scheduling outgoing end: {exc}"
+		        )
+		    else:
+		        def on_done(completed):
+		            try:
+		                completed.result()
+		            except Exception as exc:
+		                DebugConfig.debug_print(
+		                    f"Error notifying outgoing end: {exc}"
+		                )
+		        future.add_done_callback(on_done)
+
 		# STEP 2: Brief delay to ensure last voice frame is sent
 		time.sleep(0.050)  # 50ms delay
     
@@ -1452,20 +1458,34 @@ class GPIOZeroPTTHandler:
 						'direction': 'outgoing'
 					}
 	
-					# Send to web interface asynchronously (doesn't block audio)
-					def notify_web():
-						try:
-							loop = asyncio.new_event_loop()
-							asyncio.set_event_loop(loop)
-							loop.run_until_complete(
-								self.enhanced_receiver.web_bridge.notify_audio_received(audio_data)
-							)
-							loop.close()
-						except Exception as e:
-							DebugConfig.debug_print(f"Web outgoing audio notification error: {e}")
-	
-					# Run in separate thread to avoid blocking audio callback
-					threading.Thread(target=notify_web, daemon=True).start()
+					# Schedule outgoing audio on the web server event loop.
+					web = self.enhanced_receiver.web_bridge.web_interface
+					server_loop = getattr(web, "server_loop", None)
+
+					if server_loop is not None and server_loop.is_running():
+					    coro = self.enhanced_receiver.web_bridge.notify_audio_received(audio_data)
+					    try:
+					        future = asyncio.run_coroutine_threadsafe(coro, server_loop)
+					    except Exception as exc:
+					        coro.close()
+					        DebugConfig.debug_print(
+					            f"Outgoing audio scheduling error: {exc}"
+					        )
+					    else:
+					        def report_result(completed):
+					            try:
+					                completed.result()
+					            except Exception as exc:
+					                DebugConfig.debug_print(
+					                    f"Outgoing audio notification error: {exc}"
+					                )
+
+					        future.add_done_callback(report_result)
+					else:
+					    DebugConfig.debug_print(
+					        "Outgoing audio notification skipped: server loop unavailable"
+					    )
+
 					DebugConfig.debug_print(f"📤 Captured outgoing audio: {len(opus_packet)}B OPUS → {len(audio_pcm)}B PCM")
 				else:
 					DebugConfig.debug_print(f"⚠️ OPUS decode failed for outgoing audio")
